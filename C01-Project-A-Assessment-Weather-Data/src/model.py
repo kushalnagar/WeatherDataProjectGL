@@ -1,3 +1,6 @@
+from datetime import datetime
+from sqlite3 import Date
+
 import constants
 # Imports Database class from the project to provide basic functionality for database access
 from database import Database
@@ -58,8 +61,7 @@ class UserModel:
     def __find(self, key):
         if not self._isAdmin:
             print(f'Search operation on user not allowed for {self._username}!')
-            return -1
-
+            return
         user_document = self._db.get_single_data(UserModel.USER_COLLECTION, key)
         return user_document
     
@@ -70,16 +72,13 @@ class UserModel:
 
         if(self._isAdmin == False):
             print(f'Insert operation on user not allowed for {self._username}!')
-            return -1
+            return
 
         user_document = self.find_by_username(username)
         if (user_document):
             self._latest_error = f'Username {username} already exists'
             return -1
 
-        #if (role == 'admin'):
-        #    user_data = {'username': username, 'email': email, 'role': role}
-        #else:
         user_data = {'username': username, 'email': email, 'role': role,
                          'devices': {'rw': rwdevices, 'r': rdevices}}
         user_obj_id = self._db.insert_single_data(UserModel.USER_COLLECTION, user_data)
@@ -197,3 +196,111 @@ class WeatherDataModel:
         weather_data = {'device_id': device_id, 'value': value, 'timestamp': timestamp}
         wdata_obj_id = self._db.insert_single_data(WeatherDataModel.WEATHER_DATA_COLLECTION, weather_data)
         return self.find_by_object_id(wdata_obj_id)
+
+    def get_aggregated_date(self):
+        pipeline4 = [
+		{
+			'$group': {'_id': {
+								'device_id': '$device_id',
+								'day': {'$dateToString': {'format': '%Y-%m-%d', 'date': '$timestamp'}},
+								},
+							'avg_value': {"$avg": "$value"},
+							'min_value': {"$min": "$value"},
+							'max_value': {"$max": "$value"},
+							'total_count': {"$sum": 1}
+						}
+		},
+		{
+			'$project': {
+				'device_id': '$_id.device_id',
+				'date': '$_id.day',
+				'avg': '$avg_value',
+                'min': '$min_value',
+                'max': '$max_value',
+				'count': '$total_count',
+				'_id': 0
+				}
+			}
+	    ]
+        return self._db.aggregate_data(WeatherDataModel.WEATHER_DATA_COLLECTION,pipeline4)
+
+class DailyReportModel:
+    DAILY_REPORT_DATA_COLLECTION = 'daily_report_data'
+
+    def __init__(self, username=None):
+        self._db = Database()
+        self._latest_error = ''
+        self._username = username
+        if username != None:
+            self._userModel = UserModel(username)
+            self._isAdmin = self._userModel.is_user_admin()
+        else:
+            self._isAdmin = False
+
+    def find_by_object_id(self, obj_id):
+        key = {'_id': ObjectId(obj_id)}
+        return self.__find(key)
+
+    def __find(self, key):
+        #devices = self._userModel.get_read_accessed_devices()
+        drdata_document = self._db.get_single_data(DailyReportModel.DAILY_REPORT_DATA_COLLECTION, key)
+        #if self._isAdmin or (wdata_document is not None and wdata_document.get('device_id') in devices):
+        return drdata_document
+        #else:
+        #    print(f'Search operation on weather data with given criteria not allowed for {self._username}!')
+
+    def __find_all(self, key):
+        #devices = self._userModel.get_read_accessed_devices()
+        drdata_document = self._db.get_multiple_data(DailyReportModel.DAILY_REPORT_DATA_COLLECTION, key)
+        #if self._isAdmin or (wdata_document is not None and wdata_document.get('device_id') in devices):
+        return drdata_document
+
+    # find by device id and date range inclusive
+    def find_by_device_id_date_range(self, device_id, fromdate, todate):
+        devices = self._userModel.get_read_accessed_devices()
+        key = {'device_id': device_id, 'date': {'$gte': fromdate}, 'date': {'$lte': todate}}
+        if self._isAdmin or (device_id in devices):
+            return self.__find_all(key)
+        else:
+            print(f'Search operation on daily report data with given criteria not allowed for {self._username}!')
+
+    def insert(self, device_id, date, average, minimum, maximum, count):
+        self._latest_error = ''
+        devices = self._userModel.get_write_accessed_devices()
+        if self._isAdmin == False and device_id not in devices:
+            print(f'Insert operation on daily report data not allowed for {self._username}!')
+            return -1
+        #wdata_document = self.find_by_device_id_and_timestamp(device_id, day)
+        #if (wdata_document):
+        #    self._latest_error = f'Data for timestamp {day} for device id {device_id} already exists'
+        #    return -1
+
+        daily_report_data = {'device_id': device_id, 'date': date, 'average': average, 'minimum': minimum, 'maximum': maximum, 'count': count}
+        daily_report_obj_id = self._db.insert_single_data(DailyReportModel.DAILY_REPORT_DATA_COLLECTION, daily_report_data)
+        return self.find_by_object_id(daily_report_obj_id)
+
+    def drop(self):
+        self._db.drop_collection(DailyReportModel.DAILY_REPORT_DATA_COLLECTION)
+
+    def create_daily_report_bulk_entries(self):
+        self._latest_error = ''
+        if self._isAdmin == False:
+            print(f'Bulk operation on daily report data data not allowed for {self._username}!')
+            return -1
+
+        self.drop()
+
+        weatherDataModel = WeatherDataModel(self._username)
+        entries = weatherDataModel.get_aggregated_date()
+        bulk_data = []
+        for entry in entries:
+            date = datetime.strptime(entry.get('date'),'%Y-%m-%d')
+            data = {'device_id': entry.get('device_id'),
+                    'date': date,
+                    'average': entry.get('avg'),
+                    'minimum': entry.get('min'),
+                    'maximum': entry.get('max'),
+                    'count': entry.get('count')}
+            bulk_data.append(data)
+
+        self._db.insert_multiple(DailyReportModel.DAILY_REPORT_DATA_COLLECTION, bulk_data)

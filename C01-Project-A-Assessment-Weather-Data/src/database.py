@@ -12,18 +12,35 @@ class Database:
     def __init__(self):
         self._db_conn = MongoClient(f'mongodb://{Database.HOST}:{Database.PORT}')
         self._db = self._db_conn[Database.DB_NAME]
-    
+
     # This method finds a single document using field information provided in the key parameter
     # It assumes that the key returns a unique document. It returns None if no document is found
     def get_single_data(self, collection, key):
         db_collection = self._db[collection]
         document = db_collection.find_one(key)
         return document
-    
+
+    def get_multiple_data(self, collection, key):
+        db_collection = self._db[collection]
+        document = db_collection.find(key)
+        return document
+
     # This method inserts the data in a new document. It assumes that any uniqueness check is done by the caller
     def insert_single_data(self, collection, data):
         db_collection = self._db[collection]
         document = db_collection.insert_one(data)
         return document.inserted_id
-    
-    
+
+    def insert_multiple(self, collection, data):
+        db_collection = self._db[collection]
+        document = db_collection.insert_many(data)
+        return document.inserted_ids
+
+    def aggregate_data(self, collection, query):
+        db_collection = self._db[collection]
+        document = db_collection.aggregate(query)
+        return document
+
+    def drop_collection(self, collection):
+        db_collection = self._db[collection]
+        return db_collection.drop()
